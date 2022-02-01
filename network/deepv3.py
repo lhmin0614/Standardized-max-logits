@@ -415,7 +415,7 @@ class DeepV3Plus(nn.Module):
             else:
                 # raise 'unknown deepv3 variant: {}'.format(self.variant)
                 print("Not using Dilation ")
-        else:
+        else:     #resnet case
             channel_1st = 3
             channel_2nd = 64
             channel_3rd = 256
@@ -510,6 +510,7 @@ class DeepV3Plus(nn.Module):
 
         self.class_mean = None
         self.class_var = None
+        self.fss = None
 
         self.output_stride = os
         self.aspp = _AtrousSpatialPyramidPoolingModule(final_channel, 256,
@@ -561,9 +562,10 @@ class DeepV3Plus(nn.Module):
         initialize_weights(self.final1)
         initialize_weights(self.final2)
 
-    def set_statistics(self, mean, var):
+    def set_statistics(self, mean, var, fss):
         self.class_mean = mean
         self.class_var = var
+        self.fss = fss
 
     def forward(self, x, seg_gts=None, ood_gts=None, aux_gts=None, ignore_label=255):
         x_size = x.size()  # 800
@@ -596,7 +598,7 @@ class DeepV3Plus(nn.Module):
             anomaly_score, prediction = nn.Softmax(dim=1)(main_out.detach()).max(1)
 
         elif self.score_mode == 'max_logit':
-            anomaly_score, prediction = main_out.detach().max(1)
+            anomaly_score, prediction = main_out.detach().max(1) #detach 는 gradient 전파가 안되는 Tensor를 생성함
 
         elif self.score_mode == 'standardized_max_logit':
             if self.class_mean is None or self.class_var is None:
@@ -606,6 +608,10 @@ class DeepV3Plus(nn.Module):
                 anomaly_score = torch.where(prediction == c,
                                             (anomaly_score - self.class_mean[c]) / np.sqrt(self.class_var[c]),
                                             anomaly_score)
+        elif self.score_mode == 'fssd': 
+            if self.fss is None:
+                rais Exception("FSS is not set!")
+            anomaly_score, prediction = calculate_fssd(main_out.detach())
         else:
             raise Exception(f"Not implemented score mode {self.score_mode}!")
 
@@ -627,6 +633,12 @@ class DeepV3Plus(nn.Module):
             return loss1, loss2, anomaly_score
         else:
             return main_out, anomaly_score
+
+    def calculate_fssd(features):
+        #features와 self.fss의 거리를 계산하여 계산된 distance 정보 반환
+        
+        print(features.size()) #feature dimension 확인하기
+        
 
 
 def get_final_layer(model):

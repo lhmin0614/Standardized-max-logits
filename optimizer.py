@@ -95,7 +95,7 @@ def restore_snapshot(net, optimizer, scheduler, snapshot, restore_optimizer_bool
     checkpoint = torch.load(snapshot, map_location=torch.device('cpu'))
     logging.info("Checkpoint Load Compelete")
     if optimizer is not None and 'optimizer' in checkpoint and restore_optimizer_bool:
-        optimizer.load_state_dict(checkpoint['optimizer'])
+        optimizer.load_state_dict(checkpoint['optimizer']) #memo) model 
     if scheduler is not None and 'scheduler' in checkpoint and restore_optimizer_bool:
         scheduler.load_state_dict(checkpoint['scheduler'])
 

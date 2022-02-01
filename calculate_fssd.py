@@ -253,20 +253,21 @@ def calculate_statistics(train_loader, net):
         B, C, H, W = inputs.shape
         batch_pixel_size = C * H * W
 
+        calculate_fss(net, C, H, W)
+        return None
+
         with torch.no_grad():
             outputs, _ = net(inputs)
 
         if pred_list is None:
-            pred_list = outputs.data.cpu()
+            pred_list = outputs.data.cpu() #cpu() moves it back to memory accessible to the CPU.
         else:
             pred_list = torch.cat((pred_list, outputs.cpu()), 0)
         del outputs
 
         if i % 50 == 49 or i == len(train_loader) - 1:
-            #pred_list size : torch.Size([200, 19, 768, 768])
-            # 768 = crop_size, 19 : in-distribution class(나머지는 OOD로 판단) 200 : maybe batch size
-            pred_list = pred_list.transpose(1, 3) #transepose : 두개의 차원 맡교환. 19와 768 자리 바뀐다고 생각하면 됨.
-            pred_list, prediction = pred_list.max(3) #3은 세번째 dimension (19) 의미 max logit을 가지는 class의 값을 가져오겠다!
+            pred_list = pred_list.transpose(1, 3)
+            pred_list, prediction = pred_list.max(3)
 
             class_max_logits = []
             mean_dict, var_dict = {}, {}
@@ -285,7 +286,42 @@ def calculate_statistics(train_loader, net):
             np.save(f'stats/{args.dataset[0]}_mean.npy', mean_dict)
             np.save(f'stats/{args.dataset[0]}_var.npy', var_dict)
 
+            calculate_fss(net, C, H, W)
             return None
+
+def calculate_fss(net, C, H, W):
+    print("Calculating FSS")
+    rand_inputs = generate_rand_images(1, C, H, W) #create 1 random image tensor
+
+    with torch.no_grad():
+        rand_outputs, _ = net(rand_inputs)
+
+    rand_pred_list = rand_outputs.data.cpu()
+    del rand_outputs
+
+    rand_pred_list = rand_pred_list.transpose(1, 3) # n_images / W / H / n_classes
+    
+    ##FSSD 구해야 하니까 [픽셀별 아웃풋을 평균]내서 feature space로 저장해야함?! -> 이미지하나만 사용
+    ##rand_pred_list[0] : torch.Size([768, 768, 19])
+    ## 768 * 768 개의 pixel 에 대한 output값을 평균내면 된다!
+
+    print(rand_pred_list.squeeze().size())
+
+    rand_pred = rand_pred_list.squeeze().reshape(-1, 19) #reshape 768*768*19 to ?*19 2d tensor
+    fss = torch.mean(rand_pred, dim=0)
+
+    print(f"fss: {fss}")
+    np.save('stats/fss/fss_init.npy', fss)
+    return None
+    
+
+
+def generate_rand_images(n, C, H, W):
+    noise_imgs = np.random.randint(0,255,(n, C, H, W),'uint8')
+    noise_imgs = torch.Tensor(noise_imgs).cuda()
+    noise_imgs = (noise_imgs - 127.5) / 255  #normalization 해주고 시작!
+
+    return noise_imgs
 
 if __name__ == '__main__':
     main()

@@ -79,8 +79,8 @@ parser.add_argument('--ood_dataset_path', type=str,
                     help='OoD dataset path')
 
 # Anomaly score mode - msp, max_logit, standardized_max_logit
-parser.add_argument('--score_mode', type=str, default='standardized_max_logit',
-                    help='score mode for anomaly [msp, max_logit, standardized_max_logit]')
+parser.add_argument('--score_mode', type=str, default='standardized_max_logit', #change to fssd!!!
+                    help='score mode for anomaly [msp, max_logit, standardized_max_logit, fssd]')
 
 # Boundary suppression configs
 parser.add_argument('--enable_boundary_suppression', type=bool, default=True,
@@ -149,7 +149,8 @@ def get_net():
 
     class_mean = np.load(f'stats/{args.dataset}_mean.npy', allow_pickle=True)
     class_var = np.load(f'stats/{args.dataset}_var.npy', allow_pickle=True)
-    net.module.set_statistics(mean=class_mean.item(), var=class_var.item())
+    fss = np.load(f'stats/fss_init.npy', allow_pickle=True)
+    net.module.set_statistics(mean=class_mean.item(), var=class_var.item(), fss = fss.item())
 
     torch.cuda.empty_cache()
     net.eval()
@@ -202,7 +203,7 @@ if __name__ == '__main__':
 
             with torch.no_grad():
                 image = preprocess_image(image, mean_std)
-                main_out, anomaly_score = net(image)
+                main_out, anomaly_score = net(image) #deepv3.py의 forward 함수에서 출력됨
             del main_out
 
             anomaly_score_list.append(anomaly_score.cpu().numpy())

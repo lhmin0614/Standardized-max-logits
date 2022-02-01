@@ -138,6 +138,7 @@ def evaluate_eval(args, net, optimizer, scheduler, val_loss, hist, dump_images, 
     """
     Modified IOU mechanism for on-the-fly IOU calculations ( prevents memory overflow for
     large dataset) Only applies to eval/eval.py
+    train loss / validation loss 기록하고 모델의 parameter 기록 (snapshot).
     """
     if val_loss is not None and hist is not None:
         # axis 0: gt, axis 1: prediction

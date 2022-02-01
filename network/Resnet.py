@@ -336,7 +336,7 @@ def resnet101(pretrained=True, **kwargs):
         # model.load_state_dict(model_zoo.load_url(model_urls['resnet101']))
         print("########### pretrained ##############")
         # model.load_state_dict(torch.load('./pretrained/resnet101-imagenet.pth', map_location="cpu"))
-        mynn.forgiving_state_restore(model, torch.load('./pretrained/resnet101-imagenet.pth', map_location="cpu"))
+        #mynn.forgiving_state_restore(model, torch.load('./pretrained/resnet101-imagenet.pth', map_location="cpu"))
     return model
 
 
