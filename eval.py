@@ -19,8 +19,14 @@ from ood_metrics import fpr_at_95_tpr
 from tqdm import tqdm
 
 from PIL import Image
-from sklearn.metrics import roc_auc_score, roc_curve, auc, precision_recall_curve, average_precision_score
+from sklearn.metrics import roc_auc_score, roc_curve, auc, precision_recall_curve, average_precision_score, plot_roc_curve
 import torchvision.transforms as standard_transforms
+
+import tensorflow as tf
+import tensorflow_datasets as tfds
+from torchvision.transforms.functional import to_pil_image
+import matplotlib.pyplot as plt
+
 
 dirname = os.path.dirname(__file__)
 pretrained_model_path = os.path.join(dirname, 'pretrained/r101_os8_base_cty.pth')
@@ -80,10 +86,10 @@ parser.add_argument('--ood_dataset_path', type=str,
 
 # Anomaly score mode - msp, max_logit, standardized_max_logit
 parser.add_argument('--score_mode', type=str, default='standardized_max_logit', #change to fssd!!!
-                    help='score mode for anomaly [msp, max_logit, standardized_max_logit, fssd]')
+                    help='score mode for anomaly [msp, max_logit, standardized_max_logit, fssd, standardized_fssd]')
 
 # Boundary suppression configs
-parser.add_argument('--enable_boundary_suppression', type=bool, default=True,
+parser.add_argument('--enable_boundary_suppression', type=bool, default=False,
                     help='enable boundary suppression')
 parser.add_argument('--boundary_width', type=int, default=4,
                     help='initial boundary suppression width')
@@ -91,7 +97,7 @@ parser.add_argument('--boundary_iteration', type=int, default=4,
                     help='the number of boundary iterations')
 
 # Dilated smoothing configs
-parser.add_argument('--enable_dilated_smoothing', type=bool, default=True,
+parser.add_argument('--enable_dilated_smoothing', type=bool, default=False,
                     help='enable dilated smoothing')
 parser.add_argument('--smoothing_kernel_size', type=int, default=7,
                     help='kernel size of dilated smoothing')
@@ -149,9 +155,15 @@ def get_net():
 
     class_mean = np.load(f'stats/{args.dataset}_mean.npy', allow_pickle=True)
     class_var = np.load(f'stats/{args.dataset}_var.npy', allow_pickle=True)
-    fss = np.load(f'stats/fss_init.npy', allow_pickle=True)
-    net.module.set_statistics(mean=class_mean.item(), var=class_var.item(), fss = fss.item())
+    fss = np.load(f'stats/fss_init_softmax.npy', allow_pickle=True)
+    fssd_mean = np.load(f'stats/{args.dataset}_fssd_mean.npy', allow_pickle=True)
+    fssd_var = np.load(f'stats/{args.dataset}_fssd_var.npy', allow_pickle=True)
 
+    net.module.set_statistics(mean=class_mean.item(), 
+                              var=class_var.item(), 
+                              fss = fss.tolist(), 
+                              fssd_mean = fssd_mean.item(), 
+                              fssd_var = fssd_var.item())
     torch.cuda.empty_cache()
     net.eval()
 
@@ -171,6 +183,7 @@ def preprocess_image(x, mean_std):
 
 if __name__ == '__main__':
     net = get_net()
+    
 
     mean_std = ([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 
@@ -184,15 +197,13 @@ if __name__ == '__main__':
     anomaly_score_list = []
     ood_gts_list = []
 
-    cities = os.listdir(image_root_path)
-    for city in cities:
-        city_path = os.path.join(image_root_path, city)
-        city_mask_path = os.path.join(mask_root_path, city)
-        for image_file in tqdm(os.listdir(city_path)):
-            mask_file = image_file.replace('leftImg8bit.png', 'gtFine_labelIds.png')
-            image_path = os.path.join(city_path, image_file)
-            mask_path = os.path.join(city_mask_path, mask_file)
 
+    for image_file in tqdm(os.listdir(image_root_path)):
+        image_path = os.path.join(image_root_path, image_file)
+        mask_path = os.path.join(mask_root_path, image_file)
+
+        if os.path.isfile(image_path):
+            
             # 3 x H x W
             image = np.array(Image.open(image_path).convert('RGB')).astype('uint8')
 
@@ -203,11 +214,20 @@ if __name__ == '__main__':
 
             with torch.no_grad():
                 image = preprocess_image(image, mean_std)
-                main_out, anomaly_score = net(image) #deepv3.py의 forward 함수에서 출력됨
+                main_out, anomaly_score = net(image) 
             del main_out
-
+            
+            
+            ### save output image ###
+            
+            # image = torch.clamp(-anomaly_score.cpu(),  0, 255)
+            # plt.imshow(to_pil_image(image), cmap='gray')
+            # plt.imsave('img/sml'+str(image_file),to_pil_image(image))
+            # image = np.array(image, dtype=np.uint8)
+            
             anomaly_score_list.append(anomaly_score.cpu().numpy())
 
+        
     ood_gts = np.array(ood_gts_list)
     anomaly_scores = np.array(anomaly_score_list)
 
@@ -215,8 +235,8 @@ if __name__ == '__main__':
     ood_mask = (ood_gts == 1)
     ind_mask = (ood_gts == 0)
 
-    ood_out = -1 * anomaly_scores[ood_mask]
-    ind_out = -1 * anomaly_scores[ind_mask]
+    ood_out = -anomaly_scores[ood_mask]
+    ind_out = -anomaly_scores[ind_mask]
 
     ood_label = np.ones(len(ood_out))
     ind_label = np.zeros(len(ind_out))
@@ -225,14 +245,26 @@ if __name__ == '__main__':
     val_label = np.concatenate((ind_label, ood_label))
 
     print('Measuring metrics...')
-
+    #AUROC
     fpr, tpr, _ = roc_curve(val_label, val_out)
-
     roc_auc = auc(fpr, tpr)
+    #AUPRC
     precision, recall, _ = precision_recall_curve(val_label, val_out)
     prc_auc = average_precision_score(val_label, val_out)
+    #FPR at 95 TPR
     fpr = fpr_at_95_tpr(val_out, val_label)
+    
     print(f'AUROC score: {roc_auc}')
     print(f'AUPRC score: {prc_auc}')
     print(f'FPR@TPR95: {fpr}')
-
+    
+    ### plot curve ###
+    # plt.plot(fpr, tpr)
+    # plt.ylabel("True Positive Rate")
+    # plt.xlabel("False Positive Rate")
+    # plt.savefig("curve/sml_roc_curve.png")
+    # plt.cla()
+    # plt.plot(precision, recall)
+    # plt.ylabel("recall")
+    # plt.xlabel("precision")
+    # plt.savefig("curve/sml_precision_recall_curve.png")

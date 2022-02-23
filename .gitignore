@@ -140,3 +140,6 @@ pretrained/
 
 # json files
 *.json
+
+#npy files
+*.npy

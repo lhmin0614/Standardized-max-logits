@@ -182,13 +182,16 @@ class BoundarySuppressionWithSmoothing(nn.Module):
 
 
     def forward(self, x, prediction=None):
+
         if len(x.shape) == 3:
             x = x.unsqueeze(1)
         x_size = x.size()
+
         # B x 1 x H x W
         assert len(x.shape) == 4
         out = x
         if self.boundary_suppression:
+            print("boundary_suppression")
             # obtain the boundary map of width 2 by default
             # this can be calculated by the difference of dilation and erosion
             boundaries = find_boundaries(prediction.unsqueeze(1))
@@ -511,6 +514,8 @@ class DeepV3Plus(nn.Module):
         self.class_mean = None
         self.class_var = None
         self.fss = None
+        self.fssd_mean = None
+        self.fssd_var = None
 
         self.output_stride = os
         self.aspp = _AtrousSpatialPyramidPoolingModule(final_channel, 256,
@@ -562,10 +567,12 @@ class DeepV3Plus(nn.Module):
         initialize_weights(self.final1)
         initialize_weights(self.final2)
 
-    def set_statistics(self, mean, var, fss):
+    def set_statistics(self, mean, var, fss, fssd_mean, fssd_var):
         self.class_mean = mean
         self.class_var = var
         self.fss = fss
+        self.fssd_mean = fssd_mean
+        self.fssd_var = fssd_var
 
     def forward(self, x, seg_gts=None, ood_gts=None, aux_gts=None, ignore_label=255):
         x_size = x.size()  # 800
@@ -594,6 +601,7 @@ class DeepV3Plus(nn.Module):
         dec2 = self.final2(dec1)
         main_out = Upsample(dec2, x_size[2:])
 
+        out_ensemble = None
         if self.score_mode == 'msp':
             anomaly_score, prediction = nn.Softmax(dim=1)(main_out.detach()).max(1)
 
@@ -610,8 +618,22 @@ class DeepV3Plus(nn.Module):
                                             anomaly_score)
         elif self.score_mode == 'fssd': 
             if self.fss is None:
-                rais Exception("FSS is not set!")
-            anomaly_score, prediction = calculate_fssd(main_out.detach())
+                raise Exception("FSS is not set!")
+            _, prediction = main_out.detach().max(1)
+            #anomaly_score = (main_out.detach().squeeze().permute(1, 2, 0) - torch.tensor(self.fss).to('cuda')).pow(2).sum(2).sqrt().unsqueeze(0)
+            main_out_softmax = nn.Softmax(dim=1)(main_out.detach())
+            anomaly_score = (main_out_softmax.squeeze().permute(1, 2, 0) - torch.tensor(self.fss).to('cuda')).pow(2).sum(2).sqrt().unsqueeze(0)
+            
+        elif self.score_mode == 'standardized_fssd':
+            if self.fssd_mean is None or self.fssd_var is None:
+                raise Exception("fssd_mean or fssd_var is not set!")
+            _, prediction = main_out.detach().max(1)
+            anomaly_score = (main_out.detach().squeeze().permute(1, 2, 0) - torch.tensor(self.fss).to('cuda')).pow(2).sum(2).sqrt().unsqueeze(0)
+            for c in range(self.num_classes):
+                anomaly_score = torch.where(prediction ==c,
+                                           (anomaly_score - self.fssd_mean[c]) /np.sqrt(self.fssd_var[c]),
+                                            anomaly_score)
+        
         else:
             raise Exception(f"Not implemented score mode {self.score_mode}!")
 
@@ -633,11 +655,6 @@ class DeepV3Plus(nn.Module):
             return loss1, loss2, anomaly_score
         else:
             return main_out, anomaly_score
-
-    def calculate_fssd(features):
-        #features와 self.fss의 거리를 계산하여 계산된 distance 정보 반환
-        
-        print(features.size()) #feature dimension 확인하기
         
 
 
